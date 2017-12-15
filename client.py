@@ -23,7 +23,7 @@ class Client(object):
 
     def iqn_to_sd(self, iqn):
        count = 0
-       while count < 10:
+       while count < 15:
            if os.path.exists(DISK_BY_PATH):
               for item in os.listdir(DISK_BY_PATH):
                  if iqn in item:
@@ -32,9 +32,9 @@ class Client(object):
                     return os.path.basename(os.readlink(DISK_BY_PATH + "/" + item))
            time.sleep(1)
            count = count + 1
-           print (count)
-           if count > 9:
-              print iqn + "did not map to block device in 10s"
+           print "Waiting for target block device to show up in /dev/disk/by-path..."
+           if count > 14:
+              print iqn + " did not map to block device in 10s"
               sys.exit(-1)
 
 
@@ -134,7 +134,7 @@ class UbuntuClient(Client):
     
 class CentosClient(Client):
     def __init__(self, args):
-        super(UbuntuClient, self).__init__(args)
+        super(CentosClient, self).__init__(args)
         self.os_type = platform.dist()[0]
     def restart_services(self):
         self._run_cmd("service multipathd reload")
@@ -145,6 +145,8 @@ def get_client(args):
         client = UbuntuClient(args)
     elif platform.dist()[0] == "centos":
         client = CentosClient(args)
+    elif "amzn" in platform.platform():
+        client = CentosClient(args)
     else:
         raise ValueError("Client not supported")
    
@@ -152,10 +154,10 @@ def get_client(args):
 
 #Creating as a helper method because otherwise mp library does not like it if called as in instance method
 def mkfs(item):
-    if item[2].fstype == "ext4":
-	cmd = "mkfs.ext4 -E lazy_itable_init=1 {} ; mkdir -p /{}; mount {} /{}".format(item[0], item[1], item[0], item[1])
-    else:
+    if item[2].fstype == "xfs":
 	cmd = "mkfs.xfs {} ; mkdir -p /{}; mount {} /{}".format(item[0], item[1], item[0], item[1])
+    else:
+	cmd = "mkfs.ext4 -E lazy_itable_init=1 {} ; mkdir -p /{}; mount {} /{}".format(item[0], item[1], item[0], item[1])
     print cmd
     os.system(cmd)
     if item[2].chown:
