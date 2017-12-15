@@ -1,0 +1,245 @@
+#!/usr/bin/env python
+
+from __future__ import print_function, division, unicode_literals
+"""
+
+sgwutil:    AWS Storage Gateway Utility
+
+Usage:
+    sgwutil
+        --gatewayname <string>
+        --size <string> (GB)
+        --count <int>
+        --cleanall
+        --mkfs
+        --devicemap
+        --dirprefix <string>
+        --chown <string>
+        --fstype <string>
+        --createfio
+        --version
+
+    'gatewayname' corresponds to the gateway name
+    'size' is interpreted as number of GB.
+    'count' is the number of app_instances to create
+    'cleanall' applies only to a given 'gatewayname'
+    'mkfs' will create ext4 file systems on the volumes created
+    'devicemap' will show the hostside volume mapping
+    'dirprefix' specifies a mount point prefix for the volume mount
+    'chown' specifies chown:chgrp for the mount point
+    'fstype currently xfs (default) or ext4
+    'createfio' creates sample fio files for each volume
+    'version' specifies the current awsutil version and supported API version
+"""
+import sys
+import os
+import subprocess
+import time
+import argparse
+import multiprocessing as mp
+import client
+from client import get_client
+import server
+import utilities
+
+SUCCESS = 0
+FAILURE = 1
+
+
+def usage():
+    print("""
+Usage:
+    sgwutil
+        --gatewayname <string>
+        --size <string> (GB)
+        --count <int>
+        --cleanall
+        --mkfs
+        --devicemap
+        --dirprefix <string>
+        --chown <string>
+        --fstype <string>
+        --createfio
+
+    'gatewayname' corresponds to the gateway namr
+    'size' is interpreted as number of GB.
+    'count' is the number of app_instances to create
+    'cleanall' applies only to a given 'gatewayname'
+    'mkfs' will create ext4 file systems on the volumes created
+    'devicemap' will show the hostside volume mapping
+    'dirprefix' specifies a mount point prefix for the volume mount
+    'chown' specifies chown:chgrp for the mount point
+    'fstype currently xfs (default) or ext4
+    'createfio' creates sample fio files for each volume
+
+
+""")
+
+    sys.exit(FAILURE)
+
+# rewrite this
+def version(args):
+    print("sgwutil version:", VER)
+    print("API version:", args.api_version)
+    sys.exit(0)
+
+def run_cmd(cmd):
+    print("Running: ", cmd)
+    return os.system(cmd)
+
+def clean_all(c,s):
+    c.unmount()
+    targets = s.get_target_iqn_list()
+    c.target_logout_and_node_cleanup(targets)
+    s.delete_volumes()
+
+def chk_args(args):
+
+    # the only options allowed without gatewayname
+    if not args.gatewayname and not args.devicemap:
+        print("ERROR: most options require gatewayname")
+        usage()
+
+    # need at least one of these
+    if not args.gatewayname and not args.devicemap:
+        print("ERROR:  Need atleast 'gatewayname', or 'devicemap'")
+        usage()
+
+    # options required if gatewayname
+    if args.gatewayname and not (args.count or
+                              args.cleanall or args.devicemap or args.mkfs):
+        print("ERROR: Missing required arguments for 'gatewayname'")
+        usage()
+
+    # options not allowed with cleanall
+    if args.cleanall and (args.size or args.count or 
+                          args.mkfs or args.devicemap or args.dirprefix or
+                          args.chown or args.fstype):
+        print("ERROR: 'cleanall' include extraneous options")
+        usage()
+
+    # option combinations required
+    if args.count and not (args.size):
+        print("ERROR: 'count' requires 'size'")
+        usage()
+
+    if args.fstype and not args.mkfs:
+        print("ERROR: 'fstype' requires 'mkfs'")
+        usage()
+
+    # options with specific required values
+    if args.fstype and args.fstype not in ['ext4', 'xfs']:
+        print("ERROR: Only 'xfs' and 'ext4' are allowed for fstype")
+        usage()
+
+
+def iscsiadm_chk():
+    try:
+        run_cmd("iscsiadm --version")
+    except subprocess.CalledProcessError:
+        print()
+        print("iscsiadm not available.")
+        print("Please install :")
+        print("      RH/CentOS: 'yum install iscsi-initiator-utils'")
+        print("      Ubuntu:    'apt-get install open-iscsi'")
+        print()
+        sys.exit(FAILURE)
+
+def lsscsi_chk():
+    try:
+        run_cmd("lsscsi -t")
+    except subprocess.CalledProcessError:
+        print()
+        print("lsscsi not available.")
+        print("Please install :")
+        print("      RH/CentOS: 'yum install lsscsi'")
+        print("      Ubuntu:    'apt-get install lsscsi'")
+        print()
+        sys.exit(FAILURE)
+
+def main():
+
+    parser = argparse.ArgumentParser(description='sgwutil')
+    parser.add_argument('--gatewayname', action="store", dest="gatewayname")
+    parser.add_argument('--createfio', action="store_true")
+    parser.add_argument('--size', action="store", dest="size")
+    parser.add_argument('--count', action="store", dest='count', type=int)
+    parser.add_argument('--cleanall', action="store_true")
+    parser.add_argument('--mkfs', action="store_true")
+    parser.add_argument('--devicemap', action="store_true")
+    parser.add_argument('--dirprefix', action="store", dest='dirprefix')
+    parser.add_argument('--chown', action="store", dest='chown')
+    parser.add_argument('--fstype', action="store", dest='fstype')
+    parser.add_argument('--version', action="store_true",
+                        help='Specifies the current sgwutil version and '
+                             'supported API version')
+    parser.add_argument('--api-version', default='v2.2')
+    parser.add_argument('--disable-checks', action="store_true",
+                        help='Disable requirements checks before running')
+    args = parser.parse_args()
+
+    if args.version:
+        version(args)
+
+    if (len(sys.argv) < 2):
+        usage()
+
+    #if not args.disable_checks:
+    iscsiadm_chk()
+    lsscsi_chk()
+
+    #Instantiation aws client
+    s = server.Server(args)
+    c = client.Client(args)
+    u = utilities.Utilities(args)
+    
+    sgwclient = s.sgwclient
+ 
+    # Make sure args make sense
+    chk_args(args)
+
+    if args.cleanall:
+        gateway_type = s.get_gateway_type()
+        if gateway_type == "CACHED":
+           c = get_client(args)
+           clean_all(c,s)
+           sys.exit(SUCCESS)
+        elif gateway_type == "STORED":
+           sys.exit(gateway_type + " gateway is not yet supported")
+        elif gateway_type == "VTL":
+           sys.exit(gateway_type + " gateway is not yet supported")
+        elif gateway_type == "FILE_S3":
+           sys.exit(gateway_type + " gateway is not yet supported")
+
+    if args.devicemap and not args.count:
+        u.devicemap(c, s)
+        sys.exit(SUCCESS)
+
+    if args.count:
+        gateway_type = s.get_gateway_type()
+        if gateway_type == "CACHED":
+           iqn_list = s.create_cached_iscsi_volume()
+           ip_address = s.get_network_interface_id()
+           c.target_login(iqn_list, ip_address)
+           time.sleep(1)
+           c._run_cmd("lsscsi -t")
+        elif gateway_type == "STORED":
+           sys.exit(gateway_type + " gateway is not yet supported")
+        elif gateway_type == "VTL":
+           sys.exit(gateway_type + " gateway is not yet supported")
+        elif gateway_type == "FILE_S3":
+           sys.exit(gateway_type + " gateway is not yet supported")
+
+    if args.createfio:
+        mntmap = u.devicemap(c, s)
+        c.create_fio_files(mntmap)
+
+    if args.mkfs:
+        mntmap = u.devicemap(c, s)
+        c.mp_mkfs(mntmap)
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
