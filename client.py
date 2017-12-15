@@ -143,7 +143,7 @@ class CentosClient(Client):
 def get_client(args):
     if platform.dist()[0] == "Ubuntu":
         client = UbuntuClient(args)
-    elif platform.dist()[0] == "centos":
+    elif platform.dist()[0] == "centos" or platform.dist()[0] == "redhat":
         client = CentosClient(args)
     elif "amzn" in platform.platform():
         client = CentosClient(args)
@@ -157,7 +157,7 @@ def mkfs(item):
     if item[2].fstype == "xfs":
 	cmd = "mkfs.xfs {} ; mkdir -p /{}; mount {} /{}".format(item[0], item[1], item[0], item[1])
     else:
-	cmd = "mkfs.ext4 -E lazy_itable_init=1 {} ; mkdir -p /{}; mount {} /{}".format(item[0], item[1], item[0], item[1])
+	cmd = "mkfs.ext4 -F -E lazy_itable_init=1 {} ; mkdir -p /{}; mount {} /{}".format(item[0], item[1], item[0], item[1])
     print cmd
     os.system(cmd)
     if item[2].chown:
