@@ -85,7 +85,7 @@ def version(args):
 
 def run_cmd(cmd):
     print("Running: ", cmd)
-    return os.system(cmd)
+    return subprocess.check_output(cmd, shell=True)
 
 def clean_all(c,s):
     c.unmount()
