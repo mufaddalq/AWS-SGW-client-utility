@@ -3,6 +3,7 @@ import sys
 import boto3
 import botocore
 import uuid
+import time
 
 class Server(object):
     def __init__(self, args):
@@ -66,7 +67,7 @@ class Server(object):
        
        iqn_list = []
        for i in range(1, self.count + 1):
-          targetname = self.gname + "-target-" + str(i)
+          targetname = self.gname + "-target-" + str(int(time.time())) + "-" + str(i)
           clientToken = str(uuid.uuid4())
           r = self.sgwclient.create_cached_iscsi_volume(GatewayARN=self.gatewayARN, VolumeSizeInBytes=size, TargetName=targetname, NetworkInterfaceId=ip_address, ClientToken=clientToken) 
 
